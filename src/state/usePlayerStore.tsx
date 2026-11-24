@@ -15,16 +15,11 @@ import {
 } from '../model/mockData';
 import { CoverDefaults, StoryIds } from '../model/storyIds';
 import {
-  BrowserSiteAccount,
   ChapterFilter,
   ChapterListenStatus,
   ChapterUiModel,
   ColorMode,
   FrameRateMode,
-  GoogleAccountPreset,
-  GoogleAccountProfile,
-  GoogleDriveFileItem,
-  GoogleDriveState,
   PlayerSheetType,
   PronunciationRule,
   SleepMode,
@@ -47,150 +42,6 @@ import {
 } from '../theme/materialTheme';
 
 const STORAGE_KEY = 'novelbook_web_state_v1';
-
-const ACCOUNT_CLOUD_STORAGE_KEY = 'novelbook_account_cloud_v1';
-
-function makeGoogleAvatarSvg(initials: string, bg1: string, bg2: string): string {
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="${bg1}"/><stop offset="100%" stop-color="${bg2}"/></linearGradient></defs><rect width="128" height="128" rx="64" fill="url(#g)"/><circle cx="64" cy="48" r="22" fill="rgba(255,255,255,0.22)"/><path d="M24 114c6-24 22-36 40-36s34 12 40 36" fill="rgba(255,255,255,0.22)"/><text x="64" y="76" text-anchor="middle" font-family="Roboto,Arial,sans-serif" font-size="44" font-weight="700" fill="#ffffff">${initials}</text></svg>`;
-  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
-}
-
-export const GOOGLE_ACCOUNT_PRESETS: GoogleAccountPreset[] = [
-  {
-    id: 'g-1',
-    name: 'Trần Minh Quân',
-    email: 'minhquan.tran@gmail.com',
-    avatarUrl: makeGoogleAvatarSvg('MQ', '#4285F4', '#1A73E8'),
-  },
-  {
-    id: 'g-2',
-    name: 'Nguyễn Thảo Vy',
-    email: 'thaovy.nguyen@gmail.com',
-    avatarUrl: makeGoogleAvatarSvg('TV', '#0F9D58', '#0B8043'),
-  },
-  {
-    id: 'g-3',
-    name: 'Lê Hoàng Nam',
-    email: 'hoangnam.le@gmail.com',
-    avatarUrl: makeGoogleAvatarSvg('HN', '#EA4335', '#C5221F'),
-  },
-];
-
-interface PersistedAccountCloud {
-  googleAccount: GoogleAccountProfile;
-  browserAccounts: BrowserSiteAccount[];
-  googleDrive: Omit<GoogleDriveState, 'syncing' | 'statusMessage'>;
-}
-
-const DEFAULT_GOOGLE_ACCOUNT: GoogleAccountProfile = {
-  signedIn: true,
-  provider: 'google',
-  name: GOOGLE_ACCOUNT_PRESETS[0].name,
-  email: GOOGLE_ACCOUNT_PRESETS[0].email,
-  avatarUrl: GOOGLE_ACCOUNT_PRESETS[0].avatarUrl,
-  useGoogleInBrowser: true,
-  appLock: false,
-  hideLockscreenHistory: false,
-  lastSignedInAt: Date.now() - 3600_000,
-};
-
-const DEFAULT_BROWSER_ACCOUNTS: BrowserSiteAccount[] = [
-  {
-    id: 'bs-metruyenchu',
-    domain: 'metruyenchu.com.vn',
-    siteName: 'Mê Truyện Chữ',
-    accountLabel: GOOGLE_ACCOUNT_PRESETS[0].email,
-    method: 'google',
-    avatarUrl: GOOGLE_ACCOUNT_PRESETS[0].avatarUrl,
-    loggedInAt: Date.now() - 1800_000,
-    sessionActive: true,
-  },
-  {
-    id: 'bs-wikicv',
-    domain: 'wikicv.net',
-    siteName: 'Wikicv',
-    accountLabel: GOOGLE_ACCOUNT_PRESETS[0].email,
-    method: 'google',
-    avatarUrl: GOOGLE_ACCOUNT_PRESETS[0].avatarUrl,
-    loggedInAt: Date.now() - 7200_000,
-    sessionActive: true,
-  },
-  {
-    id: 'bs-docln',
-    domain: 'docln.sbs',
-    siteName: 'Hako / DocLN',
-    accountLabel: 'docgia_novelbook',
-    method: 'cookie',
-    loggedInAt: Date.now() - 86400_000,
-    sessionActive: true,
-  },
-];
-
-const DEFAULT_GOOGLE_DRIVE: GoogleDriveState = {
-  enabled: true,
-  autoBackup: true,
-  syncEpubFiles: true,
-  folderName: 'My Drive / NovelBook',
-  quotaGb: 15,
-  lastSyncedAt: Date.now() - 5400_000,
-  syncing: false,
-  statusMessage: null,
-  files: [
-    {
-      id: 'gd-1',
-      name: 'NovelBook-backup-20261124.json',
-      kind: 'backup',
-      sizeMb: 1.4,
-      updatedAt: Date.now() - 5400_000,
-      storyCount: 4,
-    },
-    {
-      id: 'gd-2',
-      name: 'Thu-vien-EPUB-dong-bo.zip',
-      kind: 'epub',
-      sizeMb: 12.8,
-      updatedAt: Date.now() - 86400_000,
-    },
-    {
-      id: 'gd-3',
-      name: 'Cau-hinh-giong-doc-AI.json',
-      kind: 'settings',
-      sizeMb: 0.3,
-      updatedAt: Date.now() - 172800_000,
-    },
-  ],
-};
-
-function loadAccountCloud(): {
-  googleAccount: GoogleAccountProfile;
-  browserAccounts: BrowserSiteAccount[];
-  googleDrive: GoogleDriveState;
-} {
-  try {
-    const raw = localStorage.getItem(ACCOUNT_CLOUD_STORAGE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw) as Partial<PersistedAccountCloud>;
-      return {
-        googleAccount: { ...DEFAULT_GOOGLE_ACCOUNT, ...(parsed.googleAccount || {}) },
-        browserAccounts: Array.isArray(parsed.browserAccounts) ? parsed.browserAccounts : DEFAULT_BROWSER_ACCOUNTS,
-        googleDrive: {
-          ...DEFAULT_GOOGLE_DRIVE,
-          ...(parsed.googleDrive || {}),
-          syncing: false,
-          statusMessage: null,
-        },
-      };
-    }
-  } catch {
-    // ignore storage read error
-  }
-  return {
-    googleAccount: DEFAULT_GOOGLE_ACCOUNT,
-    browserAccounts: DEFAULT_BROWSER_ACCOUNTS,
-    googleDrive: DEFAULT_GOOGLE_DRIVE,
-  };
-}
-
 
 interface PersistedData {
   uiTheme: UiTheme;
@@ -383,20 +234,6 @@ interface PlayerContextValue {
   historyStories: () => Story[];
   libraryStories: () => Story[];
   trendingStories: () => Story[];
-  googleAccount: GoogleAccountProfile;
-  googleAccountPresets: GoogleAccountPreset[];
-  signInWithGoogle: (account: { name: string; email: string; avatarUrl?: string }) => void;
-  signOutGoogle: () => void;
-  updateAccountSettings: (patch: Partial<GoogleAccountProfile>) => void;
-  browserAccounts: BrowserSiteAccount[];
-  loginBrowserSite: (domain: string, method: 'google' | 'cookie', accountLabel?: string) => void;
-  logoutBrowserSite: (domain: string) => void;
-  clearAllBrowserAccounts: () => void;
-  googleDrive: GoogleDriveState;
-  updateGoogleDriveSettings: (patch: Partial<Pick<GoogleDriveState, 'enabled' | 'autoBackup' | 'syncEpubFiles'>>) => void;
-  backupToGoogleDrive: (kind?: 'backup' | 'epub') => void;
-  restoreFromGoogleDrive: (fileId?: string) => void;
-  deleteGoogleDriveFile: (fileId: string) => void;
 }
 
 const PlayerContext = createContext<PlayerContextValue | null>(null);
@@ -539,31 +376,6 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [coverSeedHex, setCoverSeedHex] = useState<string | null>(null);
   const [themeReveal, setThemeReveal] = useState<ThemeRevealState>({ active: false, x: 0, y: 0, color: '#111318' });
   const [sourceBrowserOpen, setSourceBrowserOpen] = useState(false);
-  const initialAccountCloud = useMemo(() => loadAccountCloud(), []);
-  const [googleAccount, setGoogleAccount] = useState<GoogleAccountProfile>(initialAccountCloud.googleAccount);
-  const [browserAccounts, setBrowserAccounts] = useState<BrowserSiteAccount[]>(initialAccountCloud.browserAccounts);
-  const [googleDrive, setGoogleDrive] = useState<GoogleDriveState>(initialAccountCloud.googleDrive);
-
-  useEffect(() => {
-    try {
-      const payload: PersistedAccountCloud = {
-        googleAccount,
-        browserAccounts,
-        googleDrive: {
-          enabled: googleDrive.enabled,
-          autoBackup: googleDrive.autoBackup,
-          syncEpubFiles: googleDrive.syncEpubFiles,
-          folderName: googleDrive.folderName,
-          quotaGb: googleDrive.quotaGb,
-          lastSyncedAt: googleDrive.lastSyncedAt,
-          files: googleDrive.files,
-        },
-      };
-      localStorage.setItem(ACCOUNT_CLOUD_STORAGE_KEY, JSON.stringify(payload));
-    } catch {
-      // ignore storage write error
-    }
-  }, [googleAccount, browserAccounts, googleDrive]);
   const [sourceBrowserUrl, setSourceBrowserUrl] = useState('');
 
   // Listen to OS dark mode changes
@@ -1862,172 +1674,6 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       [...uiRef.current.historyItems, ...uiRef.current.libraryItems]
         .filter((s, idx, arr) => s.id !== placeholderStory.id && arr.findIndex((x) => x.id === s.id) === idx)
         .sort((a, b) => (b.lastListenedAt || b.updatedAt) - (a.lastListenedAt || a.updatedAt)),
-
-    googleAccount,
-    googleAccountPresets: GOOGLE_ACCOUNT_PRESETS,
-
-    signInWithGoogle: ({ name, email, avatarUrl }) => {
-      triggerHaptic('tap');
-      const cleanName = name.trim() || 'Người dùng Google';
-      const cleanEmail = email.trim() || 'user@gmail.com';
-      const parts = cleanName.split(/\s+/).filter(Boolean);
-      const initials = ((parts[0]?.[0] || '') + (parts[parts.length - 1]?.[0] || parts[0]?.[1] || 'G')).toUpperCase().slice(0, 2);
-      const resolvedAvatar = avatarUrl?.trim() || makeGoogleAvatarSvg(initials, '#4285F4', '#1A73E8');
-      setGoogleAccount((prev) => ({
-        ...prev,
-        signedIn: true,
-        provider: 'google',
-        name: cleanName,
-        email: cleanEmail,
-        avatarUrl: resolvedAvatar,
-        lastSignedInAt: Date.now(),
-      }));
-      setBrowserAccounts((prev) =>
-        prev.map((acc) =>
-          acc.method === 'google'
-            ? { ...acc, accountLabel: cleanEmail, avatarUrl: resolvedAvatar, loggedInAt: Date.now() }
-            : acc,
-        ),
-      );
-    },
-
-    signOutGoogle: () => {
-      triggerHaptic('tap');
-      setGoogleAccount((prev) => ({
-        ...prev,
-        signedIn: false,
-        provider: 'guest',
-      }));
-    },
-
-    updateAccountSettings: (patch) => {
-      triggerHaptic('tick');
-      setGoogleAccount((prev) => ({ ...prev, ...patch }));
-    },
-
-    browserAccounts,
-
-    loginBrowserSite: (domain, method, accountLabel) => {
-      triggerHaptic('tap');
-      const cleanDomain = domain.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0];
-      if (!cleanDomain) return;
-      const siteName = StoryIds.sourceLabel(`https://${cleanDomain}`);
-      const label =
-        method === 'google'
-          ? googleAccount.signedIn
-            ? googleAccount.email
-            : 'google-user@gmail.com'
-          : accountLabel?.trim() || 'docgia_novelbook';
-      const nextEntry: BrowserSiteAccount = {
-        id: `bs-${StoryIds.simpleHash(cleanDomain)}`,
-        domain: cleanDomain,
-        siteName: siteName === cleanDomain ? cleanDomain : siteName,
-        accountLabel: label,
-        method,
-        avatarUrl: method === 'google' && googleAccount.signedIn ? googleAccount.avatarUrl : undefined,
-        loggedInAt: Date.now(),
-        sessionActive: true,
-      };
-      setBrowserAccounts((prev) => {
-        const filtered = prev.filter((item) => item.domain !== cleanDomain);
-        return [nextEntry, ...filtered];
-      });
-      if (cleanDomain.includes('wikicv')) {
-        setUi((prev) => ({ ...prev, wikiCvLoggedIn: true }));
-      }
-    },
-
-    logoutBrowserSite: (domain) => {
-      triggerHaptic('tap');
-      const cleanDomain = domain.trim().toLowerCase().replace(/^www\./, '');
-      setBrowserAccounts((prev) => prev.filter((item) => item.domain !== cleanDomain));
-      if (cleanDomain.includes('wikicv')) {
-        setUi((prev) => ({ ...prev, wikiCvLoggedIn: false }));
-      }
-    },
-
-    clearAllBrowserAccounts: () => {
-      triggerHaptic('tap');
-      setBrowserAccounts([]);
-      setUi((prev) => ({ ...prev, wikiCvLoggedIn: false }));
-    },
-
-    googleDrive,
-
-    updateGoogleDriveSettings: (patch) => {
-      triggerHaptic('tick');
-      setGoogleDrive((prev) => ({ ...prev, ...patch }));
-    },
-
-    backupToGoogleDrive: (kind = 'backup') => {
-      triggerHaptic('tap');
-      if (!googleAccount.signedIn) {
-        setGoogleDrive((prev) => ({
-          ...prev,
-          statusMessage: 'Vui lòng đăng nhập Google trước khi lưu lên Google Drive.',
-        }));
-        return;
-      }
-      setGoogleDrive((prev) => ({
-        ...prev,
-        enabled: true,
-        syncing: true,
-        statusMessage: kind === 'epub' ? 'Đang tải tệp EPUB lên Google Drive...' : 'Đang sao lưu dữ liệu lên Google Drive...',
-      }));
-      window.setTimeout(() => {
-        const now = new Date();
-        const pad = (n: number) => String(n).padStart(2, '0');
-        const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}`;
-        const storyCount = uiRef.current.libraryItems.filter((s) => s.id !== placeholderStory.id).length;
-        const newFile: GoogleDriveFileItem =
-          kind === 'epub'
-            ? {
-                id: `gd-${Date.now()}`,
-                name: `NovelBook-EPUB-${stamp}.zip`,
-                kind: 'epub',
-                sizeMb: Number((Math.max(1.2, storyCount * 2.1)).toFixed(1)),
-                updatedAt: Date.now(),
-                storyCount,
-              }
-            : {
-                id: `gd-${Date.now()}`,
-                name: `NovelBook-backup-${stamp}.json`,
-                kind: 'backup',
-                sizeMb: Number((0.8 + storyCount * 0.25).toFixed(1)),
-                updatedAt: Date.now(),
-                storyCount,
-              };
-        setGoogleDrive((prev) => ({
-          ...prev,
-          syncing: false,
-          lastSyncedAt: Date.now(),
-          statusMessage: `Đã lưu ${newFile.name} vào ${prev.folderName}`,
-          files: [newFile, ...prev.files].slice(0, 12),
-        }));
-      }, 600);
-    },
-
-    restoreFromGoogleDrive: (fileId) => {
-      triggerHaptic('tap');
-      setGoogleDrive((prev) => {
-        const target = fileId ? prev.files.find((f) => f.id === fileId) : prev.files[0];
-        return {
-          ...prev,
-          statusMessage: target
-            ? `Đã khôi phục dữ liệu từ ${target.name} trên Google Drive`
-            : 'Chưa có tệp sao lưu nào trên Google Drive.',
-        };
-      });
-    },
-
-    deleteGoogleDriveFile: (fileId) => {
-      triggerHaptic('tick');
-      setGoogleDrive((prev) => ({
-        ...prev,
-        files: prev.files.filter((f) => f.id !== fileId),
-        statusMessage: 'Đã xoá tệp khỏi thư mục NovelBook trên Google Drive.',
-      }));
-    },
   };
 
   return <PlayerContext.Provider value={actions}>{children}</PlayerContext.Provider>;

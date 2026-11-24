@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   AudioLines,
@@ -11,9 +11,9 @@ import {
   FastForward,
   Globe,
   Home,
-  KeyRound,
   Link2,
   List,
+  LogIn,
   LogOut,
   Minus,
   Moon,
@@ -30,7 +30,8 @@ import {
   Sun,
   Timer,
   Trash2,
-  User,
+  UserCheck,
+  Users,
   Volume2,
   Volume1,
   X,
@@ -42,6 +43,16 @@ import { usePlayer } from '../state/usePlayerStore';
 import { CoverArt } from './CoverArt';
 import { SwipeableBottomSheet } from './SwipeableBottomSheet';
 import { M3ExpressiveSlider, M3ExpressiveSwitch } from './M3Expressive';
+import { GoogleAuthSnapshot, signInWithGoogle, subscribeGoogleAuth } from '../services/googleAuth';
+import {
+  BrowserAccountSettings,
+  clearAllBrowserSessions,
+  loginBrowserSite,
+  logoutBrowserSite,
+  setAutoUseGoogleInBrowser,
+  subscribeBrowserAccounts,
+} from '../services/browserAccounts';
+import { GoogleAvatar, GoogleSignInButton } from './GoogleSignInButton';
 
 export const PlayerSheetModal: React.FC = () => {
   const {
@@ -1015,33 +1026,34 @@ export const SourceBrowserModal: React.FC = () => {
     analyzeFromSearch,
     setUiTheme,
     openPlayer,
-    googleAccount,
-    googleAccountPresets,
-    signInWithGoogle,
-    updateAccountSettings,
-    browserAccounts,
-    loginBrowserSite,
-    logoutBrowserSite,
-    clearAllBrowserAccounts,
+    setWikiCvLoggedIn,
   } = usePlayer();
   const [query, setQuery] = useState('');
-  const [accountSheetOpen, setAccountSheetOpen] = useState(false);
-  const [loginTargetDomain, setLoginTargetDomain] = useState<string | null>(null);
-  const [webUserDraft, setWebUserDraft] = useState('');
-  const [browserToast, setBrowserToast] = useState<string | null>(null);
+  const [googleAuth, setGoogleAuth] = useState<GoogleAuthSnapshot>({
+    user: null,
+    photoURL: null,
+    hasDriveToken: false,
+    ready: false,
+  });
+  const [browserAccounts, setBrowserAccounts] = useState<BrowserAccountSettings>({
+    autoUseGoogleInBrowser: true,
+    sessions: [],
+  });
+  const [accountsPanelOpen, setAccountsPanelOpen] = useState(false);
+  const [loginSiteDomain, setLoginSiteDomain] = useState<string | null>(null);
+  const [siteUsername, setSiteUsername] = useState('');
+  const [googleBusy, setGoogleBusy] = useState(false);
+  const [loginError, setLoginError] = useState<string | null>(null);
+  const [confirmClearAll, setConfirmClearAll] = useState(false);
 
-  const showBrowserToast = (msg: string) => {
-    setBrowserToast(msg);
-    window.setTimeout(() => setBrowserToast(null), 2400);
-  };
-
-  const loggedInMap = useMemo(() => {
-    const m = new Map<string, (typeof browserAccounts)[number]>();
-    for (const acc of browserAccounts) {
-      m.set(acc.domain.replace(/^www\./, ''), acc);
-    }
-    return m;
-  }, [browserAccounts]);
+  useEffect(() => {
+    const unsubAuth = subscribeGoogleAuth(setGoogleAuth);
+    const unsubBrowser = subscribeBrowserAccounts(setBrowserAccounts);
+    return () => {
+      unsubAuth();
+      unsubBrowser();
+    };
+  }, []);
 
   const items = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -1066,6 +1078,64 @@ export const SourceBrowserModal: React.FC = () => {
   const cardBg = isDark ? '#181c22' : scheme.surfaceContainerLowest;
   const cardBorder = isDark ? '#272c35' : scheme.outlineVariant;
   const barBg = isDark ? '#1c2028' : scheme.surfaceContainerHigh;
+
+  const getSessionFor = (domain: string) => {
+    const clean = domain.replace(/^www\./, '').toLowerCase();
+    return browserAccounts.sessions.find((s) => s.domain === clean) ?? null;
+  };
+
+  const handleLoginSiteWithGoogle = async (domain: string) => {
+    setLoginError(null);
+    setGoogleBusy(true);
+    try {
+      let user = googleAuth.user;
+      let photo = googleAuth.photoURL;
+      if (!user) {
+        const res = await signInWithGoogle();
+        user = res.user;
+        photo = res.photoURL;
+      }
+      const clean = domain.replace(/^www\./, '').toLowerCase();
+      loginBrowserSite({
+        domain: clean,
+        accountName: user.displayName || user.email || 'Tài khoản Google',
+        email: user.email || '',
+        avatarUrl: photo,
+        authMethod: 'google',
+      });
+      if (clean === 'wikicv.org') setWikiCvLoggedIn(true);
+      setLoginSiteDomain(null);
+      setSiteUsername('');
+    } catch (err) {
+      setLoginError(err instanceof Error ? err.message : 'Đăng nhập Google không thành công.');
+    } finally {
+      setGoogleBusy(false);
+    }
+  };
+
+  const handleLoginSiteManual = (domain: string) => {
+    const name = siteUsername.trim();
+    if (!name) return;
+    const clean = domain.replace(/^www\./, '').toLowerCase();
+    loginBrowserSite({
+      domain: clean,
+      accountName: name,
+      email: name.includes('@') ? name : `${name.toLowerCase().replace(/\s+/g, '')}@${clean}`,
+      avatarUrl: null,
+      authMethod: 'site',
+    });
+    if (clean === 'wikicv.org') setWikiCvLoggedIn(true);
+    setLoginSiteDomain(null);
+    setSiteUsername('');
+  };
+
+  const handleLogoutSite = (domain: string) => {
+    const clean = domain.replace(/^www\./, '').toLowerCase();
+    logoutBrowserSite(clean);
+    if (clean === 'wikicv.org') setWikiCvLoggedIn(false);
+  };
+
+  const activeLoginSession = loginSiteDomain ? getSessionFor(loginSiteDomain) : null;
 
   return (
     <div
@@ -1112,36 +1182,35 @@ export const SourceBrowserModal: React.FC = () => {
             style={{ backgroundColor: scheme.surfaceContainerHigh }}
           >
             <SlidersHorizontal className="w-4 h-4 shrink-0" style={{ color: scheme.onSurfaceVariant }} />
-            <span className="text-[14px] truncate" style={{ color: scheme.onSurface }}>
+            <span translate="no" className="notranslate text-[14px] truncate" style={{ color: scheme.onSurface }}>
               file:///android_asset/browser_home.html
             </span>
           </div>
           <button
             type="button"
-            onClick={() => setAccountSheetOpen(true)}
-            className="relative w-10 h-10 rounded-full flex items-center justify-center cursor-pointer active:scale-90 transition-transform shrink-0"
-            aria-label="Tài khoản trình duyệt"
-            title="Quản lý tài khoản đã đăng nhập trong trình duyệt"
+            onClick={() => setAccountsPanelOpen(true)}
+            className="w-10 h-10 rounded-full flex items-center justify-center cursor-pointer active:scale-90 transition-transform relative"
+            aria-label="Quản lý tài khoản đã đăng nhập"
+            title="Quản lý tài khoản web"
           >
-            {googleAccount.signedIn ? (
-              <>
-                <img
-                  src={googleAccount.avatarUrl}
-                  alt={googleAccount.name}
-                  className="w-8 h-8 rounded-full object-cover ring-2"
-                  style={{ borderColor: scheme.primary }}
-                />
-                {browserAccounts.length > 0 && (
-                  <span
-                    className="absolute top-0.5 right-0.5 min-w-[16px] h-4 px-1 rounded-full text-[10px] font-bold flex items-center justify-center"
-                    style={{ backgroundColor: scheme.primary, color: scheme.onPrimary }}
-                  >
-                    {browserAccounts.length}
-                  </span>
-                )}
-              </>
+            {googleAuth.user ? (
+              <GoogleAvatar
+                photoURL={googleAuth.photoURL}
+                name={googleAuth.user.displayName}
+                size={30}
+                bgColor={scheme.primaryContainer}
+                fgColor={scheme.onPrimaryContainer}
+              />
             ) : (
-              <User className="w-5 h-5" />
+              <MoreVertical className="w-5 h-5" />
+            )}
+            {browserAccounts.sessions.length > 0 && (
+              <span
+                className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 rounded-full text-[10px] font-bold flex items-center justify-center"
+                style={{ backgroundColor: scheme.primary, color: scheme.onPrimary }}
+              >
+                {browserAccounts.sessions.length}
+              </span>
             )}
           </button>
         </header>
@@ -1153,7 +1222,7 @@ export const SourceBrowserModal: React.FC = () => {
         >
           {/* Search Input Pill */}
           <div
-            className="h-12 rounded-full px-4 flex items-center gap-3 mb-4"
+            className="h-12 rounded-full px-4 flex items-center gap-3 mb-3"
             style={{ backgroundColor: barBg }}
           >
             <Search className="w-[18px] h-[18px] shrink-0" style={{ color: isDark ? '#9aa2b1' : scheme.onSurfaceVariant }} />
@@ -1171,6 +1240,49 @@ export const SourceBrowserModal: React.FC = () => {
               </button>
             )}
           </div>
+
+          {/* Browser Account Strip */}
+          <button
+            type="button"
+            onClick={() => setAccountsPanelOpen(true)}
+            className="w-full rounded-[18px] px-3.5 py-2.5 mb-3.5 border flex items-center gap-3 text-left cursor-pointer active:scale-[0.99] transition"
+            style={{ backgroundColor: cardBg, borderColor: cardBorder }}
+          >
+            {googleAuth.user ? (
+              <GoogleAvatar
+                photoURL={googleAuth.photoURL}
+                name={googleAuth.user.displayName}
+                size={34}
+                bgColor={scheme.primaryContainer}
+                fgColor={scheme.onPrimaryContainer}
+              />
+            ) : (
+              <div
+                className="w-[34px] h-[34px] rounded-full flex items-center justify-center shrink-0"
+                style={{ backgroundColor: scheme.secondaryContainer, color: scheme.onSecondaryContainer }}
+              >
+                <Users className="w-4 h-4" />
+              </div>
+            )}
+            <div className="flex-1 min-w-0">
+              <div className="text-[13.5px] font-medium truncate">
+                {googleAuth.user
+                  ? `Google: ${googleAuth.user.displayName || googleAuth.user.email}`
+                  : 'Đăng nhập Google & tài khoản web'}
+              </div>
+              <div className="text-[11.5px] truncate" style={{ color: isDark ? '#9aa2b1' : scheme.onSurfaceVariant }}>
+                {browserAccounts.sessions.length > 0
+                  ? `${browserAccounts.sessions.length} web đang đăng nhập · Chạm để quản lý`
+                  : 'Chạm để đăng nhập web hoặc quản lý phiên'}
+              </div>
+            </div>
+            <span
+              className="text-xs font-medium px-2.5 py-1 rounded-full shrink-0"
+              style={{ backgroundColor: scheme.primaryContainer, color: scheme.onPrimaryContainer }}
+            >
+              Quản lý
+            </span>
+          </button>
 
           {/* Count & Theme Row */}
           <div className="flex items-center justify-between mb-3.5 px-1">
@@ -1215,14 +1327,15 @@ export const SourceBrowserModal: React.FC = () => {
                     : item.cat === 'Truyện Việt'
                       ? { bg: isDark ? '#094324' : '#c4f3d0', fg: isDark ? '#7ceaa9' : '#00532b' }
                       : { bg: isDark ? '#523003' : '#ffe6cc', fg: isDark ? '#ffb866' : '#873600' };
+              const session = getSessionFor(item.domain);
 
               return (
                 <div
                   key={item.domain}
-                  className="rounded-[20px] px-3.5 py-3 border flex items-center justify-between gap-3"
+                  className="rounded-[20px] px-3.5 py-3 border flex items-center justify-between gap-2.5"
                   style={{
                     backgroundColor: cardBg,
-                    borderColor: cardBorder,
+                    borderColor: session ? scheme.primary : cardBorder,
                   }}
                 >
                   <button
@@ -1234,8 +1347,10 @@ export const SourceBrowserModal: React.FC = () => {
                     className="flex items-center gap-3 min-w-0 flex-1 text-left cursor-pointer"
                   >
                     <SourceFavicon domain={item.domain} letter={item.letter} isDark={isDark} />
-                    <div className="min-w-0">
-                      <div className="text-[15px] font-semibold truncate">{item.domain}</div>
+                    <div className="min-w-0 flex-1">
+                      <div translate="no" className="notranslate text-[15px] font-semibold truncate">
+                        {item.domain}
+                      </div>
                       <div className="flex items-center gap-1.5 flex-wrap mt-1">
                         <span
                           className="inline-block text-[11px] font-medium px-2 py-0.5 rounded-[7px]"
@@ -1243,347 +1358,56 @@ export const SourceBrowserModal: React.FC = () => {
                         >
                           {item.cat}
                         </span>
-                        {loggedInMap.has(item.clean) && (
+                        {session && (
                           <span
-                            className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-[7px]"
-                            style={{
-                              backgroundColor: isDark ? '#0b3b24' : '#d1fae5',
-                              color: isDark ? '#6ee7b7' : '#065f46',
-                            }}
+                            className="inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-[7px] max-w-[140px] truncate"
+                            style={{ backgroundColor: scheme.primaryContainer, color: scheme.onPrimaryContainer }}
                           >
-                            <CheckCircle2 className="w-3 h-3" />
-                            <span>{loggedInMap.get(item.clean)?.method === 'google' ? 'Google' : 'Đã đăng nhập'}</span>
+                            <CheckCircle2 className="w-3 h-3 shrink-0" />
+                            <span className="truncate">{session.accountName}</span>
                           </span>
                         )}
                       </div>
                     </div>
                   </button>
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setLoginTargetDomain(item.clean);
-                        setWebUserDraft('');
-                      }}
-                      className="w-10 h-10 rounded-[14px] flex items-center justify-center cursor-pointer active:scale-90 transition-transform border"
-                      style={{
-                        backgroundColor: loggedInMap.has(item.clean)
-                          ? isDark
-                            ? '#0b3b24'
-                            : '#d1fae5'
-                          : barBg,
-                        borderColor: loggedInMap.has(item.clean)
-                          ? isDark
-                            ? '#10b98155'
-                            : '#10b98166'
-                          : cardBorder,
-                        color: loggedInMap.has(item.clean)
-                          ? isDark
-                            ? '#6ee7b7'
-                            : '#065f46'
-                          : isDark
-                            ? '#d0d7e3'
-                            : scheme.onSurface,
-                      }}
-                      title={loggedInMap.has(item.clean) ? `Quản lý tài khoản trên ${item.clean}` : `Đăng nhập vào ${item.clean}`}
-                    >
-                      {loggedInMap.has(item.clean) && loggedInMap.get(item.clean)?.method === 'google' && googleAccount.signedIn ? (
-                        <img src={googleAccount.avatarUrl} alt="" className="w-6 h-6 rounded-full object-cover" />
-                      ) : (
-                        <KeyRound className="w-4 h-4" />
-                      )}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        closeSourceBrowser();
-                        analyzeFromSearch(`https://${item.domain}/truyen/tac-pham-noi-bat`);
-                      }}
-                      className="w-10 h-10 rounded-[14px] flex items-center justify-center cursor-pointer active:scale-90 transition-transform"
-                      style={{
-                        backgroundColor: '#0a58ca',
-                        color: '#ffffff',
-                      }}
-                      title={`Mở https://${item.domain}`}
-                    >
-                      <ExternalLink className="w-[18px] h-[18px]" />
-                    </button>
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setLoginError(null);
+                      setSiteUsername('');
+                      setLoginSiteDomain(item.clean);
+                    }}
+                    className="w-10 h-11 rounded-[14px] flex items-center justify-center shrink-0 cursor-pointer active:scale-90 transition-transform border"
+                    style={{
+                      backgroundColor: session ? scheme.primaryContainer : barBg,
+                      color: session ? scheme.onPrimaryContainer : isDark ? '#e2e6ef' : scheme.onSurface,
+                      borderColor: session ? scheme.primary : cardBorder,
+                    }}
+                    title={session ? `Tài khoản trên ${item.clean}` : `Đăng nhập ${item.clean}`}
+                    aria-label={session ? `Tài khoản trên ${item.clean}` : `Đăng nhập ${item.clean}`}
+                  >
+                    {session ? <UserCheck className="w-[18px] h-[18px]" /> : <LogIn className="w-[18px] h-[18px]" />}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      closeSourceBrowser();
+                      analyzeFromSearch(`https://${item.domain}/truyen/tac-pham-noi-bat`);
+                    }}
+                    className="w-11 h-11 rounded-[14px] flex items-center justify-center shrink-0 cursor-pointer active:scale-90 transition-transform"
+                    style={{
+                      backgroundColor: '#0a58ca',
+                      color: '#ffffff',
+                    }}
+                    title={`Mở https://${item.domain}`}
+                  >
+                    <ExternalLink className="w-[18px] h-[18px]" />
+                  </button>
                 </div>
               );
             })}
           </div>
         </div>
-
-        {/* Toast feedback inside in-app browser */}
-        {browserToast && (
-          <div
-            className="absolute left-4 right-4 z-30 rounded-2xl px-3.5 py-2.5 text-xs font-medium shadow-lg text-center"
-            style={{
-              bottom: 'max(5.2rem, calc(var(--safe-bottom, env(safe-area-inset-bottom)) + 4.5rem))',
-              backgroundColor: scheme.onSurface,
-              color: scheme.surface,
-            }}
-          >
-            {browserToast}
-          </div>
-        )}
-
-        {/* In-Browser Account & Sessions Manager Sheet */}
-        {accountSheetOpen && (
-          <SwipeableBottomSheet
-            onClose={() => setAccountSheetOpen(false)}
-            backgroundColor={scheme.surfaceContainerLow}
-            textColor={scheme.onSurface}
-            handleColor={scheme.outlineVariant}
-          >
-            <div className="px-5 pb-6 pt-2 space-y-4 max-h-[75vh] overflow-y-auto thin-scrollbar">
-              <div className="flex items-center justify-between">
-                <div className="text-base font-semibold">Tài khoản trong trình duyệt</div>
-                <button type="button" onClick={() => setAccountSheetOpen(false)} className="p-1 cursor-pointer">
-                  <X className="w-5 h-5" style={{ color: scheme.onSurfaceVariant }} />
-                </button>
-              </div>
-
-              {/* Active Google Account Banner */}
-              <div className="rounded-2xl p-3.5 space-y-3" style={{ backgroundColor: scheme.surfaceContainerLowest }}>
-                <div className="flex items-center gap-3">
-                  {googleAccount.signedIn ? (
-                    <img src={googleAccount.avatarUrl} alt={googleAccount.name} className="w-11 h-11 rounded-full object-cover shrink-0" />
-                  ) : (
-                    <div className="w-11 h-11 rounded-full flex items-center justify-center shrink-0" style={{ backgroundColor: scheme.surfaceContainerHigh }}>
-                      <User className="w-5 h-5" />
-                    </div>
-                  )}
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-semibold truncate">
-                      {googleAccount.signedIn ? googleAccount.name : 'Chưa đăng nhập Google'}
-                    </div>
-                    <div className="text-xs truncate" style={{ color: scheme.onSurfaceVariant }}>
-                      {googleAccount.signedIn ? googleAccount.email : 'Đăng nhập Google để tự động đăng nhập web'}
-                    </div>
-                  </div>
-                  {!googleAccount.signedIn && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        signInWithGoogle(googleAccountPresets[0]);
-                        showBrowserToast(`Đã đăng nhập Google: ${googleAccountPresets[0].email}`);
-                      }}
-                      className="h-8 px-3 rounded-full text-xs font-medium cursor-pointer shrink-0"
-                      style={{ backgroundColor: scheme.primary, color: scheme.onPrimary }}
-                    >
-                      Đăng nhập
-                    </button>
-                  )}
-                </div>
-                {googleAccount.signedIn && (
-                  <div className="flex items-center justify-between pt-1">
-                    <span className="text-xs" style={{ color: scheme.onSurfaceVariant }}>
-                      Dùng tài khoản Google để đăng nhập nhanh web
-                    </span>
-                    <M3ExpressiveSwitch
-                      checked={googleAccount.useGoogleInBrowser}
-                      onChange={() => updateAccountSettings({ useGoogleInBrowser: !googleAccount.useGoogleInBrowser })}
-                      scheme={scheme}
-                    />
-                  </div>
-                )}
-              </div>
-
-              {/* Logged-in Websites List */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-medium" style={{ color: scheme.onSurfaceVariant }}>
-                    Trang web đã đăng nhập ({browserAccounts.length})
-                  </span>
-                  {browserAccounts.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        clearAllBrowserAccounts();
-                        showBrowserToast('Đã xoá toàn bộ phiên đăng nhập trình duyệt');
-                      }}
-                      className="text-xs font-medium cursor-pointer"
-                      style={{ color: scheme.error }}
-                    >
-                      Đăng xuất tất cả
-                    </button>
-                  )}
-                </div>
-
-                {browserAccounts.length === 0 ? (
-                  <div className="rounded-2xl p-4 text-center text-xs" style={{ backgroundColor: scheme.surfaceContainerLowest, color: scheme.onSurfaceVariant }}>
-                    Chưa có web nào đang đăng nhập. Nhấn biểu tượng chìa khoá trên từng trang để đăng nhập.
-                  </div>
-                ) : (
-                  browserAccounts.map((acc) => (
-                    <div
-                      key={acc.id}
-                      className="rounded-2xl p-3 flex items-center gap-3"
-                      style={{ backgroundColor: scheme.surfaceContainerLowest }}
-                    >
-                      {acc.method === 'google' && (acc.avatarUrl || googleAccount.avatarUrl) ? (
-                        <img src={acc.avatarUrl || googleAccount.avatarUrl} alt="" className="w-8 h-8 rounded-full object-cover shrink-0" />
-                      ) : (
-                        <div
-                          className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0"
-                          style={{ backgroundColor: scheme.secondaryContainer, color: scheme.onSecondaryContainer }}
-                        >
-                          {acc.domain[0]?.toUpperCase() || 'W'}
-                        </div>
-                      )}
-                      <div className="flex-1 min-w-0">
-                        <div className="text-sm font-medium truncate">{acc.domain}</div>
-                        <div className="text-xs truncate" style={{ color: scheme.onSurfaceVariant }}>
-                          {acc.method === 'google' ? 'Google · ' : 'Cookie · '}
-                          {acc.accountLabel}
-                        </div>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          logoutBrowserSite(acc.domain);
-                          showBrowserToast(`Đã đăng xuất khỏi ${acc.domain}`);
-                        }}
-                        className="h-8 px-2.5 rounded-full text-xs font-medium flex items-center gap-1 cursor-pointer shrink-0"
-                        style={{ backgroundColor: scheme.surfaceContainerHigh, color: scheme.error }}
-                      >
-                        <LogOut className="w-3.5 h-3.5" />
-                        <span>Thoát</span>
-                      </button>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-          </SwipeableBottomSheet>
-        )}
-
-        {/* Per-Site Quick Login Sheet inside In-App Browser */}
-        {loginTargetDomain && (
-          <SwipeableBottomSheet
-            onClose={() => setLoginTargetDomain(null)}
-            backgroundColor={scheme.surfaceContainerLow}
-            textColor={scheme.onSurface}
-            handleColor={scheme.outlineVariant}
-          >
-            <div className="px-5 pb-6 pt-2 space-y-4">
-              <div className="flex items-center justify-between">
-                <div className="min-w-0">
-                  <div className="text-base font-semibold truncate">Đăng nhập {loginTargetDomain}</div>
-                  <div className="text-xs" style={{ color: scheme.onSurfaceVariant }}>
-                    Phiên đăng nhập được dùng chung với bộ tải chương
-                  </div>
-                </div>
-                <button type="button" onClick={() => setLoginTargetDomain(null)} className="p-1 cursor-pointer">
-                  <X className="w-5 h-5" style={{ color: scheme.onSurfaceVariant }} />
-                </button>
-              </div>
-
-              {loggedInMap.has(loginTargetDomain) ? (
-                <div className="rounded-2xl p-4 space-y-3" style={{ backgroundColor: scheme.surfaceContainerLowest }}>
-                  <div className="flex items-center gap-3">
-                    {loggedInMap.get(loginTargetDomain)?.method === 'google' && googleAccount.signedIn ? (
-                      <img src={googleAccount.avatarUrl} alt="" className="w-10 h-10 rounded-full object-cover" />
-                    ) : (
-                      <div className="w-10 h-10 rounded-full flex items-center justify-center font-bold" style={{ backgroundColor: scheme.primaryContainer, color: scheme.onPrimaryContainer }}>
-                        {loginTargetDomain[0]?.toUpperCase()}
-                      </div>
-                    )}
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm font-semibold">Đang đăng nhập</div>
-                      <div className="text-xs truncate" style={{ color: scheme.onSurfaceVariant }}>
-                        {loggedInMap.get(loginTargetDomain)?.accountLabel}
-                      </div>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      logoutBrowserSite(loginTargetDomain);
-                      showBrowserToast(`Đã đăng xuất khỏi ${loginTargetDomain}`);
-                      setLoginTargetDomain(null);
-                    }}
-                    className="w-full h-10 rounded-full text-xs font-medium flex items-center justify-center gap-1.5 cursor-pointer"
-                    style={{ backgroundColor: scheme.surfaceContainerHigh, color: scheme.error }}
-                  >
-                    <LogOut className="w-4 h-4" />
-                    <span>Đăng xuất khỏi {loginTargetDomain}</span>
-                  </button>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {googleAccount.signedIn && googleAccount.useGoogleInBrowser ? (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        loginBrowserSite(loginTargetDomain, 'google');
-                        showBrowserToast(`Đã đăng nhập ${loginTargetDomain} bằng Google`);
-                        setLoginTargetDomain(null);
-                      }}
-                      className="w-full p-3 rounded-2xl flex items-center gap-3 text-left cursor-pointer border active:scale-[0.98] transition-transform"
-                      style={{
-                        backgroundColor: scheme.surfaceContainerLowest,
-                        borderColor: scheme.primary,
-                      }}
-                    >
-                      <img src={googleAccount.avatarUrl} alt="" className="w-10 h-10 rounded-full object-cover shrink-0" />
-                      <div className="flex-1 min-w-0">
-                        <div className="text-sm font-semibold">Tiếp tục bằng Google</div>
-                        <div className="text-xs truncate" style={{ color: scheme.onSurfaceVariant }}>
-                          {googleAccount.name} ({googleAccount.email})
-                        </div>
-                      </div>
-                      <CheckCircle2 className="w-5 h-5 shrink-0" style={{ color: scheme.primary }} />
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (!googleAccount.signedIn) signInWithGoogle(googleAccountPresets[0]);
-                        updateAccountSettings({ useGoogleInBrowser: true });
-                        loginBrowserSite(loginTargetDomain, 'google');
-                        showBrowserToast(`Đã đăng nhập ${loginTargetDomain} bằng Google`);
-                        setLoginTargetDomain(null);
-                      }}
-                      className="w-full h-11 rounded-full text-sm font-medium cursor-pointer"
-                      style={{ backgroundColor: scheme.primary, color: scheme.onPrimary }}
-                    >
-                      Đăng nhập nhanh bằng tài khoản Google
-                    </button>
-                  )}
-
-                  <div className="rounded-2xl p-3 space-y-2.5" style={{ backgroundColor: scheme.surfaceContainerLowest }}>
-                    <div className="text-xs font-medium" style={{ color: scheme.onSurfaceVariant }}>
-                      Hoặc đăng nhập bằng tài khoản riêng trên {loginTargetDomain}
-                    </div>
-                    <input
-                      type="text"
-                      value={webUserDraft}
-                      onChange={(e) => setWebUserDraft(e.target.value)}
-                      placeholder="Tên đăng nhập / email trên trang web"
-                      className="w-full h-10 px-3 rounded-xl border bg-transparent text-sm outline-none"
-                      style={{ borderColor: scheme.outlineVariant }}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => {
-                        loginBrowserSite(loginTargetDomain, 'cookie', webUserDraft || 'docgia_novelbook');
-                        showBrowserToast(`Đã lưu phiên đăng nhập cho ${loginTargetDomain}`);
-                        setLoginTargetDomain(null);
-                      }}
-                      className="w-full h-10 rounded-full text-xs font-medium cursor-pointer"
-                      style={{ backgroundColor: scheme.secondaryContainer, color: scheme.onSecondaryContainer }}
-                    >
-                      Lưu phiên đăng nhập web
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          </SwipeableBottomSheet>
-        )}
 
         {/* Floating Audio Waveform Bubble matching Android browser overlay */}
         {ui.activeStory && ui.activeStory.id !== '__empty__' && (
@@ -1603,6 +1427,253 @@ export const SourceBrowserModal: React.FC = () => {
           >
             <AudioLines className="w-6 h-6" />
           </button>
+        )}
+
+        {/* Per-site Login Modal inside Browser */}
+        {loginSiteDomain && (
+          <div
+            className="absolute inset-0 z-30 bg-black/55 backdrop-blur-[2px] flex items-center justify-center p-4"
+            onClick={() => setLoginSiteDomain(null)}
+          >
+            <div
+              className="w-full max-w-[360px] rounded-[26px] p-5 space-y-4 shadow-2xl"
+              style={{ backgroundColor: scheme.surfaceContainerHigh, color: scheme.onSurface }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="text-lg font-semibold truncate">Đăng nhập trang web</div>
+                  <div translate="no" className="notranslate text-xs truncate" style={{ color: scheme.primary }}>
+                    {loginSiteDomain}
+                  </div>
+                </div>
+                <button type="button" onClick={() => setLoginSiteDomain(null)} className="p-1.5 cursor-pointer">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {activeLoginSession ? (
+                <div className="space-y-3">
+                  <div
+                    className="rounded-2xl p-3 flex items-center gap-3 border"
+                    style={{ backgroundColor: scheme.surfaceContainerLowest, borderColor: scheme.outlineVariant }}
+                  >
+                    <GoogleAvatar
+                      photoURL={activeLoginSession.avatarUrl}
+                      name={activeLoginSession.accountName}
+                      size={40}
+                      bgColor={scheme.primaryContainer}
+                      fgColor={scheme.onPrimaryContainer}
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-semibold truncate">{activeLoginSession.accountName}</div>
+                      <div className="text-xs truncate" style={{ color: scheme.onSurfaceVariant }}>
+                        {activeLoginSession.authMethod === 'google'
+                          ? 'Đã liên kết Google'
+                          : activeLoginSession.authMethod === 'cookie'
+                            ? `Cookie · ${activeLoginSession.email}`
+                            : activeLoginSession.email}
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      handleLogoutSite(loginSiteDomain);
+                      setLoginSiteDomain(null);
+                    }}
+                    className="w-full h-11 rounded-full flex items-center justify-center gap-2 text-sm font-medium cursor-pointer"
+                    style={{ backgroundColor: scheme.errorContainer, color: scheme.onErrorContainer }}
+                  >
+                    <LogOut className="w-4 h-4" />
+                    <span>Đăng xuất khỏi {loginSiteDomain}</span>
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <GoogleSignInButton
+                    onClick={() => handleLoginSiteWithGoogle(loginSiteDomain)}
+                    loading={googleBusy}
+                    isDark={isDark}
+                    label={
+                      googleAuth.user
+                        ? `Tiếp tục với ${googleAuth.user.displayName || 'Google'}`
+                        : 'Đăng nhập bằng Google'
+                    }
+                  />
+
+                  <div className="flex items-center gap-2 text-xs" style={{ color: scheme.onSurfaceVariant }}>
+                    <div className="flex-1 h-px" style={{ backgroundColor: scheme.outlineVariant }} />
+                    <span>hoặc tài khoản web</span>
+                    <div className="flex-1 h-px" style={{ backgroundColor: scheme.outlineVariant }} />
+                  </div>
+
+                  <input
+                    type="text"
+                    value={siteUsername}
+                    onChange={(e) => setSiteUsername(e.target.value)}
+                    placeholder="Tên tài khoản hoặc email trên web"
+                    className="w-full h-11 px-3.5 rounded-xl border bg-transparent text-sm outline-none"
+                    style={{ borderColor: scheme.outlineVariant }}
+                  />
+                  <button
+                    type="button"
+                    disabled={!siteUsername.trim()}
+                    onClick={() => handleLoginSiteManual(loginSiteDomain)}
+                    className="w-full h-11 rounded-full text-sm font-medium disabled:opacity-40 cursor-pointer"
+                    style={{ backgroundColor: scheme.primary, color: scheme.onPrimary }}
+                  >
+                    Lưu phiên đăng nhập web
+                  </button>
+                  {loginError && (
+                    <p className="text-xs" style={{ color: scheme.error }}>
+                      {loginError}
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Logged-in Browser Accounts Manager Modal */}
+        {accountsPanelOpen && (
+          <div
+            className="absolute inset-0 z-30 bg-black/55 backdrop-blur-[2px] flex items-end justify-center"
+            onClick={() => setAccountsPanelOpen(false)}
+          >
+            <div
+              className="w-full rounded-t-[28px] p-5 max-h-[82%] flex flex-col gap-3.5 shadow-2xl"
+              style={{
+                backgroundColor: scheme.surfaceContainerHigh,
+                color: scheme.onSurface,
+                paddingBottom: 'max(1.25rem, var(--safe-bottom, env(safe-area-inset-bottom)))',
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-lg font-semibold">Tài khoản trong trình duyệt</h3>
+                  <p className="text-xs mt-0.5" style={{ color: scheme.onSurfaceVariant }}>
+                    {browserAccounts.sessions.length} trang web đã đăng nhập
+                  </p>
+                </div>
+                <button type="button" onClick={() => setAccountsPanelOpen(false)} className="p-2 cursor-pointer">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div
+                className="rounded-2xl p-3 flex items-center justify-between gap-3 border"
+                style={{ backgroundColor: scheme.surfaceContainerLowest, borderColor: scheme.outlineVariant }}
+              >
+                <div className="min-w-0 pr-2">
+                  <div className="text-sm font-medium">Dùng tài khoản Google cho web</div>
+                  <div className="text-xs mt-0.5" style={{ color: scheme.onSurfaceVariant }}>
+                    Gợi ý đăng nhập nhanh bằng Google khi mở nguồn truyện
+                  </div>
+                </div>
+                <M3ExpressiveSwitch
+                  checked={browserAccounts.autoUseGoogleInBrowser}
+                  onChange={() => setAutoUseGoogleInBrowser(!browserAccounts.autoUseGoogleInBrowser)}
+                  scheme={scheme}
+                  ariaLabel="Dùng tài khoản Google cho web"
+                />
+              </div>
+
+              <div className="flex-1 min-h-0 overflow-y-auto thin-scrollbar space-y-2">
+                {browserAccounts.sessions.length === 0 ? (
+                  <div
+                    className="rounded-2xl p-5 text-center text-xs"
+                    style={{ backgroundColor: scheme.surfaceContainerLowest, color: scheme.onSurfaceVariant }}
+                  >
+                    Chưa có trang web nào đăng nhập trong trình duyệt. Nhấn nút đăng nhập bên cạnh mỗi nguồn để kết nối.
+                  </div>
+                ) : (
+                  browserAccounts.sessions.map((s) => (
+                    <div
+                      key={s.domain}
+                      className="rounded-2xl p-3 flex items-center gap-3 border"
+                      style={{ backgroundColor: scheme.surfaceContainerLowest, borderColor: scheme.outlineVariant }}
+                    >
+                      <GoogleAvatar
+                        photoURL={s.avatarUrl}
+                        name={s.accountName}
+                        size={36}
+                        bgColor={scheme.primaryContainer}
+                        fgColor={scheme.onPrimaryContainer}
+                      />
+                      <div className="flex-1 min-w-0">
+                        <div translate="no" className="notranslate text-sm font-semibold truncate">
+                          {s.domain}
+                        </div>
+                        <div className="text-xs truncate" style={{ color: scheme.onSurfaceVariant }}>
+                          {s.accountName} ·{' '}
+                          {s.authMethod === 'google'
+                            ? 'Google'
+                            : s.authMethod === 'cookie'
+                              ? 'Cookie'
+                              : 'Tài khoản web'}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleLogoutSite(s.domain)}
+                        className="px-3 h-8 rounded-full text-xs font-medium cursor-pointer shrink-0"
+                        style={{ backgroundColor: scheme.errorContainer, color: scheme.onErrorContainer }}
+                      >
+                        Đăng xuất
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              {browserAccounts.sessions.length > 0 && (
+                confirmClearAll ? (
+                  <div
+                    className="rounded-2xl p-3 border space-y-2.5"
+                    style={{ backgroundColor: scheme.errorContainer, color: scheme.onErrorContainer, borderColor: scheme.error }}
+                  >
+                    <div className="text-xs font-medium">
+                      Đăng xuất khỏi toàn bộ {browserAccounts.sessions.length} trang web đã lưu trong trình duyệt?
+                    </div>
+                    <div className="flex gap-2 justify-end">
+                      <button
+                        type="button"
+                        onClick={() => setConfirmClearAll(false)}
+                        className="px-3.5 h-8 rounded-full text-xs font-medium cursor-pointer"
+                        style={{ backgroundColor: scheme.surface, color: scheme.onSurface }}
+                      >
+                        Hủy
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          clearAllBrowserSessions();
+                          setWikiCvLoggedIn(false);
+                          setConfirmClearAll(false);
+                        }}
+                        className="px-3.5 h-8 rounded-full text-xs font-medium cursor-pointer"
+                        style={{ backgroundColor: scheme.error, color: scheme.onError }}
+                      >
+                        Xác nhận đăng xuất
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setConfirmClearAll(true)}
+                    className="w-full h-11 rounded-full text-sm font-medium cursor-pointer"
+                    style={{ backgroundColor: scheme.errorContainer, color: scheme.onErrorContainer }}
+                  >
+                    Đăng xuất tất cả trang web
+                  </button>
+                )
+              )}
+            </div>
+          </div>
         )}
       </div>
     </div>
