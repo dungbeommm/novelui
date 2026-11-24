@@ -286,3 +286,54 @@ export interface UiState {
   dnsProvider: 'SYSTEM' | 'CLOUDFLARE' | 'GOOGLE' | 'ADGUARD';
   wikiCvLoggedIn: boolean;
 }
+
+export interface GoogleAccountPreset {
+  id: string;
+  name: string;
+  email: string;
+  avatarUrl: string;
+}
+
+export interface GoogleAccountProfile {
+  signedIn: boolean;
+  provider: 'google' | 'guest';
+  name: string;
+  email: string;
+  avatarUrl: string;
+  useGoogleInBrowser: boolean;
+  appLock: boolean;
+  hideLockscreenHistory: boolean;
+  lastSignedInAt: number | null;
+}
+
+export interface BrowserSiteAccount {
+  id: string;
+  domain: string;
+  siteName: string;
+  accountLabel: string;
+  method: 'google' | 'cookie';
+  avatarUrl?: string;
+  loggedInAt: number;
+  sessionActive: boolean;
+}
+
+export interface GoogleDriveFileItem {
+  id: string;
+  name: string;
+  kind: 'backup' | 'epub' | 'settings';
+  sizeMb: number;
+  updatedAt: number;
+  storyCount?: number;
+}
+
+export interface GoogleDriveState {
+  enabled: boolean;
+  autoBackup: boolean;
+  syncEpubFiles: boolean;
+  folderName: string;
+  quotaGb: number;
+  lastSyncedAt: number | null;
+  syncing: boolean;
+  statusMessage: string | null;
+  files: GoogleDriveFileItem[];
+}
