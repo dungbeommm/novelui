@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   ArrowLeft,
   BarChart3,
@@ -6,12 +6,14 @@ import {
   Check,
   CheckCircle2,
   ChevronRight,
+  Cloud,
   CloudDownload,
   DatabaseBackup,
   Download,
   ExternalLink,
   Eye,
   EyeOff,
+  FileJson,
   Flame,
   Globe,
   HardDrive,
@@ -20,6 +22,7 @@ import {
   Info,
   KeyRound,
   Lock,
+  LogOut,
   Mic,
   Moon,
   Palette,
@@ -34,15 +37,39 @@ import {
   Trash2,
   Upload,
   User,
+  Users,
   Volume2,
   Wallpaper,
   Zap,
 } from 'lucide-react';
 import { ColorMode, UiTheme } from '../model/types';
+import { MaterialColorScheme } from '../theme/materialTheme';
 import { MONET, VOICE_MODEL_PACKAGES, placeholderStory } from '../model/mockData';
 import { usePlayer } from '../state/usePlayerStore';
 import { VoiceClonePage, VoiceManagerPage } from './VoiceManagerPage';
 import { M3ExpressiveSlider, M3ExpressiveSwitch } from '../components/M3Expressive';
+import {
+  getGoogleAccessToken,
+  GoogleAuthSnapshot,
+  signInWithGoogle,
+  signOutGoogle,
+  subscribeGoogleAuth,
+} from '../services/googleAuth';
+import {
+  deleteDriveFile,
+  downloadDriveFile,
+  DriveBackupFile,
+  listAppDriveFiles,
+  saveBackupToDrive,
+} from '../services/googleDrive';
+import {
+  BrowserAccountSettings,
+  clearAllBrowserSessions,
+  logoutBrowserSite,
+  setAutoUseGoogleInBrowser,
+  subscribeBrowserAccounts,
+} from '../services/browserAccounts';
+import { GoogleAvatar, GoogleSignInButton } from '../components/GoogleSignInButton';
 
 interface CategoryItem {
   id: string;
@@ -60,7 +87,7 @@ const CATEGORY_GROUPS: CategoryGroup[] = [
   {
     cardTitle: 'Cá nhân',
     items: [
-      { id: 'account', title: 'Tài khoản', subtitle: 'Đăng nhập, hồ sơ, bảo mật', icon: User },
+      { id: 'account', title: 'Tài khoản', subtitle: 'Đăng nhập Google, hồ sơ, bảo mật', icon: User },
     ],
   },
   {
@@ -74,8 +101,8 @@ const CATEGORY_GROUPS: CategoryGroup[] = [
   {
     cardTitle: 'Dữ liệu',
     items: [
-      { id: 'storage', title: 'Lưu trữ', subtitle: 'Tải ngoại tuyến, bộ nhớ đệm, xuất file', icon: HardDrive },
-      { id: 'backup', title: 'Đồng bộ & sao lưu', subtitle: 'Thiết bị khác, sao lưu, khôi phục', icon: DatabaseBackup },
+      { id: 'storage', title: 'Lưu trữ', subtitle: 'Ngoại tuyến, bộ nhớ đệm, Google Drive', icon: HardDrive },
+      { id: 'backup', title: 'Đồng bộ & sao lưu', subtitle: 'Thiết bị khác, Drive, khôi phục', icon: DatabaseBackup },
     ],
   },
   {
@@ -150,6 +177,7 @@ export const SettingsScreen: React.FC = () => {
     importBackupJson,
     setKaraokeFont,
     toggleAutoNext,
+    setWikiCvLoggedIn,
   } = usePlayer();
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -161,6 +189,32 @@ export const SettingsScreen: React.FC = () => {
 
   const [profile, setProfile] = useState<LocalProfile>(() => loadProfile());
   const [profileSavedMsg, setProfileSavedMsg] = useState<string | null>(null);
+  const [googleAuth, setGoogleAuth] = useState<GoogleAuthSnapshot>({
+    user: null,
+    photoURL: null,
+    hasDriveToken: false,
+    ready: false,
+  });
+  const [googleLoading, setGoogleLoading] = useState(false);
+  const [googleError, setGoogleError] = useState<string | null>(null);
+  const [browserAccounts, setBrowserAccounts] = useState<BrowserAccountSettings>({
+    autoUseGoogleInBrowser: true,
+    sessions: [],
+  });
+  const [confirmClearBrowser, setConfirmClearBrowser] = useState(false);
+  const [confirmSignOutGoogle, setConfirmSignOutGoogle] = useState(false);
+
+  const [driveFiles, setDriveFiles] = useState<DriveBackupFile[]>([]);
+  const [driveLoading, setDriveLoading] = useState(false);
+  const [driveFileName, setDriveFileName] = useState('NovelBook-storage.json');
+  const [driveStatus, setDriveStatus] = useState<string | null>(null);
+  const [driveError, setDriveError] = useState<string | null>(null);
+  const [pendingDriveAction, setPendingDriveAction] = useState<
+    | { type: 'overwrite'; file: DriveBackupFile; targetName: string }
+    | { type: 'restore'; file: DriveBackupFile }
+    | { type: 'delete'; file: DriveBackupFile }
+    | null
+  >(null);
 
   const [blurDraft, setBlurDraft] = useState(ui.playerBlur);
   const [hapticDraft, setHapticDraft] = useState(ui.hapticIntensity);
@@ -191,6 +245,131 @@ export const SettingsScreen: React.FC = () => {
   const [bugSentMsg, setBugSentMsg] = useState<string | null>(null);
 
   const restoreInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    const unsubAuth = subscribeGoogleAuth(setGoogleAuth);
+    const unsubBrowser = subscribeBrowserAccounts(setBrowserAccounts);
+    return () => {
+      unsubAuth();
+      unsubBrowser();
+    };
+  }, []);
+
+  const refreshDriveFiles = async (tokenOverride?: string | null) => {
+    const token = tokenOverride ?? getGoogleAccessToken();
+    if (!token) return;
+    setDriveLoading(true);
+    setDriveError(null);
+    try {
+      const files = await listAppDriveFiles(token);
+      setDriveFiles(files);
+    } catch (err) {
+      setDriveError(err instanceof Error ? err.message : 'Không tải được danh sách Google Drive.');
+    } finally {
+      setDriveLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if ((selectedId === 'storage' || selectedId === 'backup') && googleAuth.hasDriveToken) {
+      refreshDriveFiles();
+    }
+  }, [selectedId, googleAuth.hasDriveToken]);
+
+  const handleGoogleSignIn = async () => {
+    setGoogleError(null);
+    setGoogleLoading(true);
+    try {
+      const res = await signInWithGoogle();
+      saveProfile(
+        {
+          ...profile,
+          signedIn: true,
+          name: res.user.displayName || profile.name,
+          email: res.user.email || profile.email,
+        },
+        'Đã đăng nhập bằng Google'
+      );
+      if (selectedId === 'storage' || selectedId === 'backup') {
+        await refreshDriveFiles(res.accessToken);
+      }
+    } catch (err) {
+      setGoogleError(err instanceof Error ? err.message : 'Không thể đăng nhập bằng Google.');
+    } finally {
+      setGoogleLoading(false);
+    }
+  };
+
+  const handleGoogleSignOut = async () => {
+    setConfirmSignOutGoogle(false);
+    await signOutGoogle();
+    setDriveFiles([]);
+    setDriveStatus(null);
+  };
+
+  const handleSaveToDriveClick = async () => {
+    const token = getGoogleAccessToken();
+    if (!token) {
+      setDriveError('Phiên Google Drive cần được kết nối lại.');
+      return;
+    }
+    const cleanName = (driveFileName.trim() || 'NovelBook-storage.json').endsWith('.json')
+      ? driveFileName.trim() || 'NovelBook-storage.json'
+      : `${driveFileName.trim()}.json`;
+
+    const existing = driveFiles.find((f) => f.name.toLowerCase() === cleanName.toLowerCase());
+    if (existing) {
+      setPendingDriveAction({ type: 'overwrite', file: existing, targetName: cleanName });
+      return;
+    }
+
+    setDriveLoading(true);
+    setDriveError(null);
+    setDriveStatus(null);
+    try {
+      const saved = await saveBackupToDrive(token, cleanName, exportBackupJson());
+      setDriveStatus(`Đã lưu "${saved.name}" lên Google Drive.`);
+      await refreshDriveFiles(token);
+    } catch (err) {
+      setDriveError(err instanceof Error ? err.message : 'Lưu tệp lên Google Drive thất bại.');
+    } finally {
+      setDriveLoading(false);
+    }
+  };
+
+  const executeConfirmedDriveAction = async () => {
+    if (!pendingDriveAction) return;
+    const action = pendingDriveAction;
+    const token = getGoogleAccessToken();
+    if (!token) {
+      setPendingDriveAction(null);
+      setDriveError('Phiên Google Drive đã hết hạn. Vui lòng kết nối lại Google.');
+      return;
+    }
+    setPendingDriveAction(null);
+    setDriveLoading(true);
+    setDriveError(null);
+    setDriveStatus(null);
+    try {
+      if (action.type === 'overwrite') {
+        const saved = await saveBackupToDrive(token, action.targetName, exportBackupJson(), action.file.id);
+        setDriveStatus(`Đã cập nhật tệp "${saved.name}" trên Google Drive.`);
+        await refreshDriveFiles(token);
+      } else if (action.type === 'restore') {
+        const json = await downloadDriveFile(token, action.file.id);
+        importBackupJson(json);
+        setDriveStatus(`Đã khôi phục dữ liệu từ "${action.file.name}".`);
+      } else if (action.type === 'delete') {
+        await deleteDriveFile(token, action.file.id);
+        setDriveStatus(`Đã xoá "${action.file.name}" khỏi Google Drive.`);
+        await refreshDriveFiles(token);
+      }
+    } catch (err) {
+      setDriveError(err instanceof Error ? err.message : 'Thao tác Google Drive thất bại.');
+    } finally {
+      setDriveLoading(false);
+    }
+  };
 
   const bottomInset = 28;
   const allCategories = CATEGORY_GROUPS.flatMap((g) => g.items);
@@ -731,75 +910,224 @@ export const SettingsScreen: React.FC = () => {
             </div>
           ) : selectedId === 'account' ? (
             <div className="space-y-3">
+              {/* Google Account Card */}
               <div className="rounded-[28px] p-4 space-y-4" style={{ backgroundColor: scheme.surfaceContainerLow }}>
                 <div className="flex items-center gap-3.5">
-                  <div
-                    className="w-14 h-14 rounded-full flex items-center justify-center text-lg font-bold shrink-0"
-                    style={{ backgroundColor: scheme.primaryContainer, color: scheme.onPrimaryContainer }}
-                  >
-                    {(profile.name.trim()[0] || 'N').toUpperCase()}
-                  </div>
+                  <GoogleAvatar
+                    photoURL={googleAuth.photoURL}
+                    name={googleAuth.user?.displayName || profile.name}
+                    size={56}
+                    bgColor={scheme.primaryContainer}
+                    fgColor={scheme.onPrimaryContainer}
+                  />
                   <div className="flex-1 min-w-0">
-                    <div className="text-base font-semibold truncate">{profile.signedIn ? profile.name : 'Chế độ khách'}</div>
+                    <div className="text-base font-semibold truncate">
+                      {googleAuth.user
+                        ? googleAuth.user.displayName || profile.name
+                        : 'Chưa đăng nhập Google'}
+                    </div>
                     <div className="text-xs truncate mt-0.5" style={{ color: scheme.onSurfaceVariant }}>
-                      {profile.signedIn ? profile.email : 'Đăng nhập để đồng bộ tiến độ đọc'}
+                      {googleAuth.user
+                        ? googleAuth.user.email
+                        : 'Đăng nhập Google để lấy ảnh đại diện, lưu Drive & đăng nhập web'}
                     </div>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      saveProfile(
-                        { ...profile, signedIn: !profile.signedIn },
-                        !profile.signedIn ? 'Đã đăng nhập tài khoản' : 'Đã chuyển sang chế độ khách'
-                      )
-                    }
-                    className="px-3.5 h-9 rounded-full text-xs font-medium cursor-pointer shrink-0"
-                    style={{
-                      backgroundColor: profile.signedIn ? scheme.surfaceContainerHigh : scheme.primary,
-                      color: profile.signedIn ? scheme.onSurface : scheme.onPrimary,
-                    }}
-                  >
-                    {profile.signedIn ? 'Đăng xuất' : 'Đăng nhập'}
-                  </button>
                 </div>
 
-                {profile.signedIn && (
-                  <>
-                    <Divider color={scheme.outlineVariant} />
-                    <div className="space-y-2.5">
-                      <div className="text-[15px] font-medium">Hồ sơ cá nhân</div>
-                      <input
-                        type="text"
-                        value={profile.name}
-                        onChange={(e) => setProfile((p) => ({ ...p, name: e.target.value }))}
-                        placeholder="Tên hiển thị"
-                        className="w-full h-11 px-3.5 rounded-xl border bg-transparent text-sm outline-none"
-                        style={{ borderColor: scheme.outlineVariant }}
-                      />
-                      <input
-                        type="email"
-                        value={profile.email}
-                        onChange={(e) => setProfile((p) => ({ ...p, email: e.target.value }))}
-                        placeholder="Email tài khoản"
-                        className="w-full h-11 px-3.5 rounded-xl border bg-transparent text-sm outline-none"
-                        style={{ borderColor: scheme.outlineVariant }}
-                      />
+                {googleAuth.user ? (
+                  <div className="space-y-2.5">
+                    <div
+                      className="rounded-2xl px-3.5 py-2.5 flex items-center justify-between gap-2 text-xs"
+                      style={{ backgroundColor: scheme.surfaceContainerLowest }}
+                    >
+                      <span style={{ color: scheme.onSurfaceVariant }}>
+                        {googleAuth.hasDriveToken
+                          ? 'Đã kết nối Google Drive & đồng bộ trình duyệt'
+                          : 'Phiên Google Drive cần làm mới để lưu file'}
+                      </span>
+                      {!googleAuth.hasDriveToken && (
+                        <button
+                          type="button"
+                          onClick={handleGoogleSignIn}
+                          disabled={googleLoading}
+                          className="font-semibold shrink-0 cursor-pointer"
+                          style={{ color: scheme.primary }}
+                        >
+                          Làm mới
+                        </button>
+                      )}
+                    </div>
+
+                    {confirmSignOutGoogle ? (
+                      <div
+                        className="rounded-2xl p-3 space-y-2"
+                        style={{ backgroundColor: scheme.errorContainer, color: scheme.onErrorContainer }}
+                      >
+                        <div className="text-xs font-medium">
+                          Đăng xuất khỏi tài khoản Google {googleAuth.user.email}?
+                        </div>
+                        <div className="flex gap-2 justify-end">
+                          <button
+                            type="button"
+                            onClick={() => setConfirmSignOutGoogle(false)}
+                            className="px-3.5 h-8 rounded-full text-xs font-medium cursor-pointer"
+                            style={{ backgroundColor: scheme.surface, color: scheme.onSurface }}
+                          >
+                            Hủy
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleGoogleSignOut}
+                            className="px-3.5 h-8 rounded-full text-xs font-medium cursor-pointer"
+                            style={{ backgroundColor: scheme.error, color: scheme.onError }}
+                          >
+                            Đăng xuất
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
                       <button
                         type="button"
-                        onClick={() => saveProfile(profile, 'Đã lưu thông tin hồ sơ')}
-                        className="h-10 px-5 rounded-full text-sm font-medium cursor-pointer"
-                        style={{ backgroundColor: scheme.primary, color: scheme.onPrimary }}
+                        onClick={() => setConfirmSignOutGoogle(true)}
+                        className="w-full h-10 rounded-full flex items-center justify-center gap-2 text-xs font-medium cursor-pointer border"
+                        style={{ borderColor: scheme.outlineVariant, color: scheme.error }}
                       >
-                        Lưu hồ sơ
+                        <LogOut className="w-4 h-4" />
+                        <span>Đăng xuất Google</span>
                       </button>
-                    </div>
-                  </>
+                    )}
+                  </div>
+                ) : (
+                  <GoogleSignInButton
+                    onClick={handleGoogleSignIn}
+                    loading={googleLoading}
+                    isDark={scheme.isDark}
+                    label="Đăng nhập với Google"
+                  />
+                )}
+
+                {googleError && (
+                  <p className="text-xs" style={{ color: scheme.error }}>
+                    {googleError}
+                  </p>
                 )}
 
                 {profileSavedMsg && (
                   <p className="text-xs font-medium" style={{ color: scheme.primary }}>
                     {profileSavedMsg}
                   </p>
+                )}
+              </div>
+
+              {/* Logged-in Browser Accounts Management */}
+              <div className="rounded-[28px] p-4 space-y-3" style={{ backgroundColor: scheme.surfaceContainerLow }}>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 text-[15px] font-medium">
+                    <Users className="w-4 h-4" style={{ color: scheme.primary }} />
+                    <span>Tài khoản web trong trình duyệt</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => openSourceBrowser()}
+                    className="text-xs font-semibold cursor-pointer"
+                    style={{ color: scheme.primary }}
+                  >
+                    Mở trình duyệt
+                  </button>
+                </div>
+
+                <SettingsSwitchRow
+                  title="Dùng tài khoản Google cho web"
+                  subtitle="Dùng nhanh hồ sơ Google khi đăng nhập trang truyện trong trình duyệt"
+                  checked={browserAccounts.autoUseGoogleInBrowser}
+                  onChange={() => setAutoUseGoogleInBrowser(!browserAccounts.autoUseGoogleInBrowser)}
+                />
+
+                <Divider color={scheme.outlineVariant} />
+
+                {browserAccounts.sessions.length === 0 ? (
+                  <p className="text-xs leading-relaxed" style={{ color: scheme.onSurfaceVariant }}>
+                    Chưa có trang web nào được đăng nhập trong trình duyệt. Mở trình duyệt của app để đăng nhập bằng Google hoặc tài khoản web.
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    {browserAccounts.sessions.map((s) => (
+                      <div
+                        key={s.domain}
+                        className="rounded-2xl p-2.5 flex items-center gap-3"
+                        style={{ backgroundColor: scheme.surfaceContainerLowest }}
+                      >
+                        <GoogleAvatar
+                          photoURL={s.avatarUrl}
+                          name={s.accountName}
+                          size={36}
+                          bgColor={scheme.primaryContainer}
+                          fgColor={scheme.onPrimaryContainer}
+                        />
+                        <div className="flex-1 min-w-0">
+                          <div translate="no" className="notranslate text-sm font-medium truncate">
+                            {s.domain}
+                          </div>
+                          <div className="text-xs truncate" style={{ color: scheme.onSurfaceVariant }}>
+                            {s.accountName} · {s.authMethod === 'google' ? 'Google' : 'Tài khoản web'}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            logoutBrowserSite(s.domain);
+                            if (s.domain === 'wikicv.org') setWikiCvLoggedIn(false);
+                          }}
+                          className="px-3 h-8 rounded-full text-xs font-medium cursor-pointer shrink-0"
+                          style={{ backgroundColor: scheme.errorContainer, color: scheme.onErrorContainer }}
+                        >
+                          Đăng xuất
+                        </button>
+                      </div>
+                    ))}
+
+                    {confirmClearBrowser ? (
+                      <div
+                        className="rounded-2xl p-3 space-y-2"
+                        style={{ backgroundColor: scheme.errorContainer, color: scheme.onErrorContainer }}
+                      >
+                        <div className="text-xs font-medium">
+                          Xoá toàn bộ {browserAccounts.sessions.length} phiên đăng nhập web trong trình duyệt?
+                        </div>
+                        <div className="flex gap-2 justify-end">
+                          <button
+                            type="button"
+                            onClick={() => setConfirmClearBrowser(false)}
+                            className="px-3.5 h-8 rounded-full text-xs font-medium cursor-pointer"
+                            style={{ backgroundColor: scheme.surface, color: scheme.onSurface }}
+                          >
+                            Hủy
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              clearAllBrowserSessions();
+                              setWikiCvLoggedIn(false);
+                              setConfirmClearBrowser(false);
+                            }}
+                            className="px-3.5 h-8 rounded-full text-xs font-medium cursor-pointer"
+                            style={{ backgroundColor: scheme.error, color: scheme.onError }}
+                          >
+                            Xác nhận
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setConfirmClearBrowser(true)}
+                        className="w-full h-9 rounded-full text-xs font-medium cursor-pointer"
+                        style={{ backgroundColor: scheme.errorContainer, color: scheme.onErrorContainer }}
+                      >
+                        Đăng xuất tất cả trang web
+                      </button>
+                    )}
+                  </div>
                 )}
               </div>
 
@@ -1155,6 +1483,26 @@ export const SettingsScreen: React.FC = () => {
                   </p>
                 )}
               </div>
+
+              <GoogleDriveStorageCard
+                scheme={scheme}
+                googleAuth={googleAuth}
+                googleLoading={googleLoading}
+                onConnectGoogle={handleGoogleSignIn}
+                driveFiles={driveFiles}
+                driveLoading={driveLoading}
+                driveFileName={driveFileName}
+                onChangeFileName={setDriveFileName}
+                driveStatus={driveStatus}
+                driveError={driveError}
+                onRefresh={() => refreshDriveFiles()}
+                onSave={handleSaveToDriveClick}
+                onAskRestore={(file) => setPendingDriveAction({ type: 'restore', file })}
+                onAskDelete={(file) => setPendingDriveAction({ type: 'delete', file })}
+                pendingAction={pendingDriveAction}
+                onConfirmAction={executeConfirmedDriveAction}
+                onCancelAction={() => setPendingDriveAction(null)}
+              />
             </div>
           ) : selectedId === 'backup' ? (
             <div className="space-y-3">
@@ -1185,10 +1533,30 @@ export const SettingsScreen: React.FC = () => {
                 )}
               </div>
 
+              <GoogleDriveStorageCard
+                scheme={scheme}
+                googleAuth={googleAuth}
+                googleLoading={googleLoading}
+                onConnectGoogle={handleGoogleSignIn}
+                driveFiles={driveFiles}
+                driveLoading={driveLoading}
+                driveFileName={driveFileName}
+                onChangeFileName={setDriveFileName}
+                driveStatus={driveStatus}
+                driveError={driveError}
+                onRefresh={() => refreshDriveFiles()}
+                onSave={handleSaveToDriveClick}
+                onAskRestore={(file) => setPendingDriveAction({ type: 'restore', file })}
+                onAskDelete={(file) => setPendingDriveAction({ type: 'delete', file })}
+                pendingAction={pendingDriveAction}
+                onConfirmAction={executeConfirmedDriveAction}
+                onCancelAction={() => setPendingDriveAction(null)}
+              />
+
               <div className="rounded-[28px] p-4 space-y-3" style={{ backgroundColor: scheme.surfaceContainerLow }}>
                 <div className="text-[15px] font-medium">Sao lưu & khôi phục thủ công</div>
                 <p className="text-xs" style={{ color: scheme.onSurfaceVariant }}>
-                  Xuất toàn bộ tủ sách, tiến độ nghe và cấu hình ra tệp JSON hoặc khôi phục từ tệp đã lưu.
+                  Xuất toàn bộ tủ sách, tiến độ nghe và cấu hình ra tệp JSON hoặc khôi phục từ tệp đã lưu trên máy.
                 </p>
                 <div className="flex gap-2.5">
                   <button
@@ -1650,3 +2018,222 @@ const ExtensionModuleCard: React.FC<{
     </div>
   );
 };
+
+const GoogleDriveStorageCard: React.FC<{
+  scheme: MaterialColorScheme;
+  googleAuth: GoogleAuthSnapshot;
+  googleLoading: boolean;
+  onConnectGoogle: () => void;
+  driveFiles: DriveBackupFile[];
+  driveLoading: boolean;
+  driveFileName: string;
+  onChangeFileName: (name: string) => void;
+  driveStatus: string | null;
+  driveError: string | null;
+  onRefresh: () => void;
+  onSave: () => void;
+  onAskRestore: (file: DriveBackupFile) => void;
+  onAskDelete: (file: DriveBackupFile) => void;
+  pendingAction:
+    | { type: 'overwrite'; file: DriveBackupFile; targetName: string }
+    | { type: 'restore'; file: DriveBackupFile }
+    | { type: 'delete'; file: DriveBackupFile }
+    | null;
+  onConfirmAction: () => void;
+  onCancelAction: () => void;
+}> = ({
+  scheme,
+  googleAuth,
+  googleLoading,
+  onConnectGoogle,
+  driveFiles,
+  driveLoading,
+  driveFileName,
+  onChangeFileName,
+  driveStatus,
+  driveError,
+  onRefresh,
+  onSave,
+  onAskRestore,
+  onAskDelete,
+  pendingAction,
+  onConfirmAction,
+  onCancelAction,
+}) => {
+  const formatSize = (bytes?: string) => {
+    const n = Number(bytes || 0);
+    if (!n) return 'JSON';
+    if (n < 1024) return `${n} B`;
+    return `${(n / 1024).toFixed(1)} KB`;
+  };
+
+  return (
+    <div className="rounded-[28px] p-4 space-y-3" style={{ backgroundColor: scheme.surfaceContainerLow }}>
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <div
+            className="w-10 h-10 rounded-[14px] flex items-center justify-center shrink-0"
+            style={{ backgroundColor: scheme.primaryContainer, color: scheme.onPrimaryContainer }}
+          >
+            <Cloud className="w-5 h-5" />
+          </div>
+          <div className="min-w-0">
+            <div className="text-[15px] font-medium truncate">Lưu trữ trên Google Drive</div>
+            <div className="text-xs truncate" style={{ color: scheme.onSurfaceVariant }}>
+              {googleAuth.hasDriveToken
+                ? googleAuth.user?.email || 'Đã kết nối Google Drive'
+                : 'Lưu và khôi phục tệp dữ liệu trực tiếp trên Drive'}
+            </div>
+          </div>
+        </div>
+        {googleAuth.hasDriveToken && (
+          <button
+            type="button"
+            onClick={onRefresh}
+            disabled={driveLoading}
+            className="p-2 rounded-full cursor-pointer disabled:opacity-40"
+            title="Làm mới danh sách"
+            aria-label="Làm mới danh sách Google Drive"
+          >
+            <RefreshCw className={`w-4 h-4 ${driveLoading ? 'animate-spin' : ''}`} />
+          </button>
+        )}
+      </div>
+
+      {!googleAuth.hasDriveToken ? (
+        <GoogleSignInButton
+          onClick={onConnectGoogle}
+          loading={googleLoading}
+          isDark={scheme.isDark}
+          label={googleAuth.user ? 'Kết nối lại Google Drive' : 'Đăng nhập Google để lưu Drive'}
+        />
+      ) : (
+        <div className="space-y-3">
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={driveFileName}
+              onChange={(e) => onChangeFileName(e.target.value)}
+              placeholder="NovelBook-storage.json"
+              className="flex-1 min-w-0 h-11 px-3.5 rounded-xl border bg-transparent text-sm outline-none"
+              style={{ borderColor: scheme.outlineVariant }}
+            />
+            <button
+              type="button"
+              disabled={driveLoading}
+              onClick={onSave}
+              className="px-4 h-11 rounded-full text-sm font-medium shrink-0 inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+              style={{ backgroundColor: scheme.primary, color: scheme.onPrimary }}
+            >
+              <Upload className="w-4 h-4" />
+              <span>Lưu Drive</span>
+            </button>
+          </div>
+
+          {pendingAction && (
+            <div
+              className="rounded-2xl p-3 space-y-2.5 border"
+              style={{
+                backgroundColor: pendingAction.type === 'delete' ? scheme.errorContainer : scheme.secondaryContainer,
+                color: pendingAction.type === 'delete' ? scheme.onErrorContainer : scheme.onSecondaryContainer,
+                borderColor: pendingAction.type === 'delete' ? scheme.error : scheme.primary,
+              }}
+            >
+              <div className="text-xs font-medium leading-relaxed">
+                {pendingAction.type === 'overwrite'
+                  ? `Ghi đè tệp “${pendingAction.targetName}” đã tồn tại trên Google Drive?`
+                  : pendingAction.type === 'restore'
+                    ? `Khôi phục dữ liệu từ tệp “${pendingAction.file.name}”? Tủ sách và cài đặt hiện tại trên máy sẽ được cập nhật.`
+                    : `Xoá vĩnh viễn tệp “${pendingAction.file.name}” khỏi Google Drive? Không thể hoàn tác.`}
+              </div>
+              <div className="flex gap-2 justify-end">
+                <button
+                  type="button"
+                  onClick={onCancelAction}
+                  className="px-3.5 h-8 rounded-full text-xs font-medium cursor-pointer"
+                  style={{ backgroundColor: scheme.surface, color: scheme.onSurface }}
+                >
+                  Hủy
+                </button>
+                <button
+                  type="button"
+                  onClick={onConfirmAction}
+                  className="px-3.5 h-8 rounded-full text-xs font-medium cursor-pointer"
+                  style={{
+                    backgroundColor: pendingAction.type === 'delete' ? scheme.error : scheme.primary,
+                    color: pendingAction.type === 'delete' ? scheme.onError : scheme.onPrimary,
+                  }}
+                >
+                  Xác nhận
+                </button>
+              </div>
+            </div>
+          )}
+
+          <div className="space-y-1.5">
+            <div className="text-xs font-medium" style={{ color: scheme.onSurfaceVariant }}>
+              Tệp lưu trữ trên Google Drive ({driveFiles.length})
+            </div>
+            {driveFiles.length === 0 ? (
+              <div
+                className="rounded-2xl p-3 text-xs"
+                style={{ backgroundColor: scheme.surfaceContainerLowest, color: scheme.onSurfaceVariant }}
+              >
+                {driveLoading ? 'Đang tải danh sách từ Google Drive…' : 'Chưa có tệp sao lưu nào được ứng dụng lưu trên Google Drive.'}
+              </div>
+            ) : (
+              driveFiles.map((file) => (
+                <div
+                  key={file.id}
+                  className="rounded-2xl p-2.5 flex items-center gap-2.5"
+                  style={{ backgroundColor: scheme.surfaceContainerLowest }}
+                >
+                  <FileJson className="w-5 h-5 shrink-0" style={{ color: scheme.primary }} />
+                  <div className="flex-1 min-w-0">
+                    <div translate="no" className="notranslate text-xs font-semibold truncate">
+                      {file.name}
+                    </div>
+                    <div className="text-[11px] truncate" style={{ color: scheme.onSurfaceVariant }}>
+                      {formatSize(file.size)}
+                      {file.modifiedTime ? ` · ${new Date(file.modifiedTime).toLocaleDateString('vi-VN')}` : ''}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => onAskRestore(file)}
+                    disabled={driveLoading}
+                    className="px-2.5 h-8 rounded-full text-xs font-medium cursor-pointer shrink-0"
+                    style={{ backgroundColor: scheme.secondaryContainer, color: scheme.onSecondaryContainer }}
+                  >
+                    Tải về
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onAskDelete(file)}
+                    disabled={driveLoading}
+                    className="p-1.5 rounded-full cursor-pointer shrink-0"
+                    aria-label={`Xoá ${file.name}`}
+                  >
+                    <Trash2 className="w-4 h-4" style={{ color: scheme.error }} />
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+
+      {driveStatus && (
+        <p className="text-xs font-medium" style={{ color: scheme.primary }}>
+          {driveStatus}
+        </p>
+      )}
+      {driveError && (
+        <p className="text-xs" style={{ color: scheme.error }}>
+          {driveError}
+        </p>
+      )}
+    </div>
+  );
+};
+
