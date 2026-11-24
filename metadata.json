@@ -1,0 +1,5 @@
+{
+  "name": "NovelBook",
+  "description": "Ứng dụng đọc và nghe truyện bằng giọng AI với giao diện Material 3, trình phát toàn màn hình, lời truyện karaoke, quản lý thư viện và nhập EPUB.",
+  "requestFramePermissions": []
+}
